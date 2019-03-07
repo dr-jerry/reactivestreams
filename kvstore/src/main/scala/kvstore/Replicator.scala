@@ -68,7 +68,6 @@ class Replicator(val replica: ActorRef) extends Actor with ActorLogging {
       tuple._1 ! Replicated(tuple._2.key, tuple._2.id)
     }
     case c: Check => {
-      log.warning("0,1 check")
       acks.keys.foreach(key => { sendSnapshot(replica, acks(key)._2, key)})
     }
   }

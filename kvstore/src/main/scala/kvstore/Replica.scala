@@ -1,16 +1,17 @@
 package kvstore
 
-import akka.actor.{ OneForOneStrategy, Props, ActorRef, Actor }
+import java.util.concurrent.TimeUnit
+
+import akka.actor.{Actor, ActorRef, Cancellable, OneForOneStrategy, PoisonPill, Props, SupervisorStrategy, Terminated}
 import kvstore.Arbiter._
+
 import scala.collection.immutable.Queue
 import akka.actor.SupervisorStrategy.Restart
+
 import scala.annotation.tailrec
-import akka.pattern.{ ask, pipe }
-import akka.actor.Terminated
+import akka.pattern.{ask, pipe}
+
 import scala.concurrent.duration._
-import akka.actor.PoisonPill
-import akka.actor.OneForOneStrategy
-import akka.actor.SupervisorStrategy
 import akka.util.Timeout
 
 object Replica {
@@ -21,6 +22,7 @@ object Replica {
   case class Insert(key: String, value: String, id: Long) extends Operation
   case class Remove(key: String, id: Long) extends Operation
   case class Get(key: String, id: Long) extends Operation
+  case class CheckPersist(id: Long, v: Option[String])
 
   sealed trait OperationReply
   case class OperationAck(id: Long) extends OperationReply
@@ -35,7 +37,6 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
   import Replicator._
   import Persistence._
   import context.dispatcher
-
   /*
    * The contents of this actor is just a suggestion, you can implement it in any way you like.
    */
@@ -45,6 +46,11 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
   var secondaries = Map.empty[ActorRef, ActorRef]
   // the current set of replicators
   var replicators = Set.empty[ActorRef]
+  var persistRef : ActorRef = context.actorOf(persistenceProps)
+  val ms100 = FiniteDuration(100L, TimeUnit.MILLISECONDS)
+  def scheduler(cp: CheckPersist) = {
+    context.system.scheduler.schedule(ms100,ms100,self, cp)
+  }
 
   arbiter ! Join
 
@@ -66,6 +72,8 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
     }
   }
 
+
+
   /* TODO Behavior for the replica role. */
   def replica(seq: Long): Receive = {
     case s:Snapshot if (s.seq <= seq) => { if (s.seq == seq) {
@@ -74,10 +82,23 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
         case Some(value) => kv += (s.key -> value)
         case None => kv -= s.key
       }}
-      sender ! SnapshotAck(s.key, s.seq)
+      persistRef ! Persist(s.key, s.valueOption, s.seq)
+      var schedule = scheduler(CheckPersist(seq, s.valueOption))
+      context.become(persistAwait(s.key, s.seq, sender, schedule), false)
     }
     case Get(key, id) => sender ! GetResult(key, kv.get(key),id)
   }
 
+  def persistAwait(key: String, seq: Long, origSender: ActorRef, schedule: Cancellable): Receive = {
+    case Persisted(pkey, id) if(id==seq && key == pkey) => {
+      origSender ! SnapshotAck(key, seq)
+      schedule.cancel()
+      context.unbecome()
+    }
+    case CheckPersist(pid, valueOption) if(pid==seq) => {
+      persistRef ! Persist(key, valueOption, seq)
+    }
+    case Get(key, id) => sender ! GetResult(key, kv.get(key),id)
+  }
 }
 
