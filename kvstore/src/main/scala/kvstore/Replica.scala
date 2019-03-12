@@ -62,9 +62,11 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
   /* TODO Behavior for  the leader role. */
   val leader: Receive = {
     case Get(key, id) => context.sender() ! GetResult(key, kv.get(key), id)
-    case Insert(key, value, id) => {
-      kv += (key -> value)
-      context.sender() ! OperationAck(id)
+    case i: Insert => {
+      kv += (i.key -> i.value)
+      var schedule = scheduler(CheckPersist(i.id, Some(i.value)))
+      persistRef ! Persist(i.key, Some(i.value),i.id)
+      context.become(insertAwait(context.sender(), i, schedule), false)
     }
     case Remove(key, id) => {
       kv -= (key)
@@ -72,6 +74,17 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
     }
   }
 
+  def insertAwait(origSender: ActorRef, i: Insert, schedule: Cancellable ): Receive = {
+    case Persisted(pkey, id) if(id==i.id && i.key == pkey) => {
+      origSender ! OperationAck(i.id)
+      schedule.cancel()
+      context.unbecome()
+    }
+    case CheckPersist(pid, valueOption) if(pid==i.id) => {
+      persistRef ! Persist(i.key, valueOption, i.id)
+    }
+
+  }
 
 
   /* TODO Behavior for the replica role. */
