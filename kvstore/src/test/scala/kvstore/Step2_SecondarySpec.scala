@@ -20,13 +20,14 @@ trait Step2_SecondarySpec
     ()
   }
 
-  test("Step2-case2: Secondary (in isolation) must handle Snapshots") {
+
+  test("Orig Step2-case2: Secondary (in isolation) must handle Snapshots") {
     import Replicator._
 
     val arbiter = TestProbe()
     val replicator = TestProbe()
-        val secondary = system.actorOf(Replica.props(arbiter.ref, Persistence.props(flaky = false)), "step2-case2-secondary")
-        val client = session(secondary)
+    val secondary = system.actorOf(Replica.props(arbiter.ref, Persistence.props(flaky = false)), "step2-case2-secondary")
+    val client = session(secondary)
 
     arbiter.expectMsg(Join)
     arbiter.send(secondary, JoinedSecondary)

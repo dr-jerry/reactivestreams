@@ -2,7 +2,7 @@ package kvstore
 
 import java.util.concurrent.TimeUnit
 
-import akka.actor.{Actor, ActorRef, Cancellable, OneForOneStrategy, PoisonPill, Props, SupervisorStrategy, Terminated}
+import akka.actor.{Actor, ActorLogging, ActorRef, Cancellable, NotInfluenceReceiveTimeout, OneForOneStrategy, PoisonPill, Props, ReceiveTimeout, SupervisorStrategy, Terminated}
 import kvstore.Arbiter._
 
 import scala.collection.immutable.Queue
@@ -19,10 +19,10 @@ object Replica {
     def key: String
     def id: Long
   }
-  case class Insert(key: String, value: String, id: Long) extends Operation
+  case class Insert(key: String, value: String, id: Long) extends Operation with NotInfluenceReceiveTimeout
   case class Remove(key: String, id: Long) extends Operation
   case class Get(key: String, id: Long) extends Operation
-  case class CheckPersist(id: Long, v: Option[String])
+  case class CheckPersist(id: Long, v: Option[String]) extends NotInfluenceReceiveTimeout
 
   sealed trait OperationReply
   case class OperationAck(id: Long) extends OperationReply
@@ -32,7 +32,7 @@ object Replica {
   def props(arbiter: ActorRef, persistenceProps: Props): Props = Props(new Replica(arbiter, persistenceProps))
 }
 
-class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
+class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor with ActorLogging {
   import Replica._
   import Replicator._
   import Persistence._
@@ -66,6 +66,7 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
       kv += (i.key -> i.value)
       var schedule = scheduler(CheckPersist(i.id, Some(i.value)))
       persistRef ! Persist(i.key, Some(i.value),i.id)
+      context.setReceiveTimeout(1000.milliseconds)
       context.become(insertAwait(context.sender(), i, schedule), false)
     }
     case Remove(key, id) => {
@@ -77,11 +78,17 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
   def insertAwait(origSender: ActorRef, i: Insert, schedule: Cancellable ): Receive = {
     case Persisted(pkey, id) if(id==i.id && i.key == pkey) => {
       origSender ! OperationAck(i.id)
+      context.setReceiveTimeout(Duration.Inf)
       schedule.cancel()
       context.unbecome()
     }
     case CheckPersist(pid, valueOption) if(pid==i.id) => {
+      log.warning("firing persist again")
       persistRef ! Persist(i.key, valueOption, i.id)
+    }
+    case r: ReceiveTimeout => {
+      log.warning(s"timed out $r")
+      origSender ! OperationFailed(i.id)
     }
 
   }
