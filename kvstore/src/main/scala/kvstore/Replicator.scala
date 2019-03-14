@@ -59,8 +59,9 @@ class Replicator(val replica: ActorRef) extends Actor with ActorLogging {
   /* TODO Behavior for the Replicator. */
   def receive: Receive = {
     case r: Replicate => {
-      val snapshot = Snapshot(r.key, r.valueOption, nextSeq())
+      val snapshot = Snapshot(r.key, r.valueOption, r.id)
       replica ! snapshot
+      log.warning(s"received $r, sending $snapshot ")
       acks += ((snapshot.seq , (sender,r)))}
     case s: SnapshotAck => {
       val tuple = acks(s.seq)

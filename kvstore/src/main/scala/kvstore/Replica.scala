@@ -64,18 +64,33 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor with
     case Get(key, id) => context.sender() ! GetResult(key, kv.get(key), id)
     case i: Insert => {
       kv += (i.key -> i.value)
-      var schedule = scheduler(CheckPersist(i.id, Some(i.value)))
+      var schedule = scheduler(CheckPersist(i.id, Some(i.value))) //5.2
       persistRef ! Persist(i.key, Some(i.value),i.id)
       context.setReceiveTimeout(1000.milliseconds)
-      context.become(insertAwait(context.sender(), i, schedule), false)
+      context.become(insertAwait(context.sender(), i, schedule, replicators), false)
+      for (ref <- replicators) {
+        var repl = Replicate(i.key, Some(i.value), i.id)
+        log.warning(s"sending Snapshot $repl  to $ref")
+        ref ! repl
+      }
     }
     case Remove(key, id) => {
       kv -= (key)
       context.sender() ! OperationAck(id)
     }
+    case Replicas(replicas) => {
+      val added = replicas -- secondaries.keys.toSet
+      var removed = secondaries.keys.toSet -- replicas
+      secondaries ++= added.map(ref => (ref, context.actorOf(Replicator.props(ref))))
+      secondaries --= removed
+      secondaries -= self
+      replicators = secondaries.values.toSet
+      for (elem <- secondaries) { log.warning(s"secondaries $elem")}
+
+    }
   }
 
-  def insertAwait(origSender: ActorRef, i: Insert, schedule: Cancellable ): Receive = {
+  def insertAwait(origSender: ActorRef, i: Insert, schedule: Cancellable, replicas: Set[ActorRef] ): Receive = {
     case Persisted(pkey, id) if(id==i.id && i.key == pkey) => {
       origSender ! OperationAck(i.id)
       context.setReceiveTimeout(Duration.Inf)
