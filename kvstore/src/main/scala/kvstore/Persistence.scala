@@ -5,10 +5,11 @@ import akka.actor.{Actor, Props}
 import scala.util.Random
 import java.util.concurrent.atomic.AtomicInteger
 
-import kvstore.Replica.Persist
+import kvstore.AckAble
 
 object Persistence {
   case class Persisted(key: String, id: Long)
+  case class Persist(key: String, valueOption: Option[String], id: Long) extends AckAble
 
   class PersistenceException extends Exception("Persistence failure")
 

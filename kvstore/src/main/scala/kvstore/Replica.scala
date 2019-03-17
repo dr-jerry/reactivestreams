@@ -13,15 +13,16 @@ import akka.pattern.{ask, pipe}
 
 import scala.concurrent.duration._
 import akka.util.Timeout
+trait AckAble;
 
 object Replica {
+
   sealed trait Operation {
     def key: String
     def id: Long
   }
-  case class Persist(key: String, valueOption: Option[String], id: Long) extends Operation
-  case class Insert(key: String, value: String, id: Long) extends Operation with NotInfluenceReceiveTimeout
-  case class Remove(key: String, id: Long) extends Operation
+  case class Insert(key: String, value: String, id: Long) extends Operation with AckAble with NotInfluenceReceiveTimeout
+  case class Remove(key: String, id: Long) extends Operation with AckAble
   case class Get(key: String, id: Long) extends Operation
   case class CheckPersist(id: Long, v: Option[String]) extends NotInfluenceReceiveTimeout
   case class CheckPersist2(duration: Duration)
@@ -53,7 +54,12 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor with
   def scheduler(cp: CheckPersist) = {
     context.system.scheduler.schedule(ms100,ms100,self, cp)
   }
-  var unacked = Map.empty[(ActorRef, Long), (ActorRef, Operation, Long)]
+  // Map of unacked operations which need to be resend, failed on notification,
+  // ActorRef1 Actor sentTo, and Actor Expecting Ack from.
+  // Long1 id
+  // ActorRef2 Actor received Operation from.
+  // Long2 the timestamp.
+  var unacked = Map.empty[(ActorRef, Long), (ActorRef, AckAble, Long)]
 
   arbiter ! Join
 
@@ -68,12 +74,12 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor with
     case i: Insert => {
       kv += (i.key -> i.value)
       var operation = Persist(i.key, Some(i.value), i.id)
-      unacked +=
-      unacked += ((persistRef, i.id), ((self, operation, System.currentTimeMillis())))
-      var schedule = scheduler(CheckPersist(i.id, Some(i.value))) //5.2
-      persistRef ! Persist(i.key, Some(i.value),i.id)
-      context.setReceiveTimeout(1000.milliseconds)
-      context.become(insertAwait(context.sender(), i, schedule, replicators), false)
+      log.warning(s"send $operation to $persistRef")
+      unacked += ((persistRef, i.id) -> ((context.sender(), operation, System.currentTimeMillis())))
+      //var schedule = scheduler(CheckPersist(i.id, Some(i.value))) //5.2
+      persistRef ! operation
+//      context.setReceiveTimeout(1000.milliseconds)
+//      context.become(insertAwait(context.sender(), i, schedule, replicators), false)
       for (ref <- replicators) {
         var repl = Replicate(i.key, Some(i.value), i.id)
         log.warning(s"sending Snapshot $repl  to $ref")
@@ -97,7 +103,28 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor with
       secondaries -= self
       replicators = secondaries.values.toSet
       for (elem <- secondaries) { log.warning(s"secondaries $elem")}
+    }
 
+    case CheckPersist2(duration) => {
+      unacked.foreach(entry => {
+        var ((recvr, id), (origSendr, operation, starttime)) = entry
+        if (System.currentTimeMillis() - starttime > duration.toMillis) {
+          origSendr ! OperationFailed(id)
+        } else {
+          recvr ! operation
+        }
+      })
+    }
+    case Persisted(pkey, id) => {
+      log.warning(s"received Persisted $pkey, $id, ${sender()}")
+      unacked.foreach(entry => {
+        var ((rcvr, id), (origSendr, operation, dur)) = entry
+        log.warning(s"unacked ($rcvr, $id) = > ($origSendr $operation $dur")
+      })
+      unacked.get((sender, id)).map(entry => {
+        var (origSendr, operation, dur) = entry
+        origSendr ! OperationAck(id)
+      })
     }
   }
 
@@ -116,7 +143,6 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor with
       log.warning(s"timed out $r")
       origSender ! OperationFailed(i.id)
     }
-
   }
 
 

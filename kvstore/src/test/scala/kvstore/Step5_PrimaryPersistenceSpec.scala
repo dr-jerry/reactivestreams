@@ -21,7 +21,7 @@ trait Step5_PrimaryPersistenceSpec
     arbiter.expectMsg(Join)
     arbiter.send(primary, JoinedPrimary)
 
-    val setId = client.set("foo", "bar")
+    val setId = client.set("foo", "bar  ")
     val persistId = persistence.expectMsgPF() {
       case Persist("foo", Some("bar"), id) => id
     }
