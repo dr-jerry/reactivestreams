@@ -19,10 +19,12 @@ object Replica {
     def key: String
     def id: Long
   }
+  case class Persist(key: String, valueOption: Option[String], id: Long) extends Operation
   case class Insert(key: String, value: String, id: Long) extends Operation with NotInfluenceReceiveTimeout
   case class Remove(key: String, id: Long) extends Operation
   case class Get(key: String, id: Long) extends Operation
   case class CheckPersist(id: Long, v: Option[String]) extends NotInfluenceReceiveTimeout
+  case class CheckPersist2(duration: Duration)
 
   sealed trait OperationReply
   case class OperationAck(id: Long) extends OperationReply
@@ -51,6 +53,7 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor with
   def scheduler(cp: CheckPersist) = {
     context.system.scheduler.schedule(ms100,ms100,self, cp)
   }
+  var unacked = Map.empty[(ActorRef, Long), (ActorRef, Operation, Long)]
 
   arbiter ! Join
 
@@ -64,6 +67,9 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor with
     case Get(key, id) => context.sender() ! GetResult(key, kv.get(key), id)
     case i: Insert => {
       kv += (i.key -> i.value)
+      var operation = Persist(i.key, Some(i.value), i.id)
+      unacked +=
+      unacked += ((persistRef, i.id), ((self, operation, System.currentTimeMillis())))
       var schedule = scheduler(CheckPersist(i.id, Some(i.value))) //5.2
       persistRef ! Persist(i.key, Some(i.value),i.id)
       context.setReceiveTimeout(1000.milliseconds)
@@ -81,8 +87,13 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor with
     case Replicas(replicas) => {
       val added = replicas -- secondaries.keys.toSet
       var removed = secondaries.keys.toSet -- replicas
-      secondaries ++= added.map(ref => (ref, context.actorOf(Replicator.props(ref))))
-      secondaries --= removed
+      var newMap = added.map(replica => (replica, context.actorOf(Replicator.props(replica))))
+      secondaries ++= newMap
+//      for (replicator <- newMap.toMap.values) {
+//        for (entry <- kv) {
+//          replicator ! Snapshot(entry._1, Some(entry._2), nex)
+//        }
+//      }
       secondaries -= self
       replicators = secondaries.values.toSet
       for (elem <- secondaries) { log.warning(s"secondaries $elem")}
@@ -134,6 +145,11 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor with
       persistRef ! Persist(key, valueOption, seq)
     }
     case Get(key, id) => sender ! GetResult(key, kv.get(key),id)
+  }
+
+  override def preStart(): Unit = {
+    super.preStart()
+    context.system.scheduler.schedule(ms100, ms100, self, CheckPersist2(1000.milliseconds))
   }
 }
 
