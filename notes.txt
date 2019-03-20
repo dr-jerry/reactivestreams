@@ -1,0 +1,62 @@
+mandatory parental supervision 6:30
+override val supervisorStrategy =OneForOnestrategy {
+restart, stop, escalate
+}
+
+actors = Map.empty[actorref, int]
+override val supervisiorStrategy = OneForOneStrategy() { val is better than def because it will recreate.
+case _:DBException =>
+actors(senders) match {
+case toomany if toomany > 10 => restarts -= sender; Stop  9:30
+}
+
+AllForOneStrategy
+WihtinTimeRange 12:20
+
+prestart
+fail
+prerestart  18:30
+postrestart
+
+Video2
+DeathWatch
+context.watch(target)
+Terminated 5.47 private case class
+10:30
+failover 11:30
+
+
+Receptionist
+eventstream 20:00
+
+
+
+Typed Actors.
+guardianKit.retrieveAllEffects
+guardianKit.isAlive
+context.messageAdaptor
+
+5.4
+sealed trait Secretary
+case class BuyBook(title, maxPrixe, ActorRef[RequestQuote]) extends Secretary
+case class QuoteWrapper(msg: Quote) extends Secretary
+case class ShippingWrapper(msg: Shipping) extends Secretary
+
+def secretary(address: Address): Behavior[Secretar] =
+  Behaviors.receivePartial {
+    case (ctx, BuyBook(title, maxPrice, seller)) =>
+      val quote: ActorRef[Quote] = ctx.messageAdapter(QuoteWrapper) // QuoteWrapper Quote => QuoteWrapper.
+      seller ! RequestQuote(title, quote)
+      buyBook(maxPrice, address)
+  }
+
+ def buyBook(maxPrice, addres) : Behavior[Secreatry] ==
+  Behaviors.receivePartial {
+    case (ctx, QuoteWrapper(Quote(price,session)))
+
+
+stash/unstash 10:36
+
+TypeSafe discovery
+ServiceKey[Message]("messag")
+context.spawnAnonymously
