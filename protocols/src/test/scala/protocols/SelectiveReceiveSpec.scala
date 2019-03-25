@@ -25,8 +25,7 @@ trait SelectiveReceiveSpec extends FunSuite with PropertyChecks with MustMatcher
               println(s"spec behavior received $x sending to inbox $inbox")
               inbox.ref ! x
               expectOne(inbox, xs)
-            }
-          }
+            }          }
         }
         case Nil => {
           print("ignoring")
@@ -48,8 +47,8 @@ trait SelectiveReceiveSpec extends FunSuite with PropertyChecks with MustMatcher
     val abcs = Gen.choose(0, 30).flatMap(Gen.listOfN(_, abc))
 
     forAll((abcs, "abcs")) { list =>
-      val i = TestInbox[String]()
-      val b = behavior(i, 30, values)
+      val inbox = TestInbox[String]()
+      val b = behavior(inbox, 30, values)
       val testkit = BehaviorTestKit(b, "eventually execute")
       list.foreach(value => {
         println(s"spec send a $value to $testkit")
@@ -57,8 +56,8 @@ trait SelectiveReceiveSpec extends FunSuite with PropertyChecks with MustMatcher
         testkit.runOne()
       })
       println(s"testing ${list.mkString(";;")}")
-      val delivered = i.receiveAll()
-
+      val delivered = inbox.receiveAll()
+      println(s"from inbox $inbox delivered ${delivered.mkString(";;")}")
       delivered mustBe sorted
       values.foldLeft(true) { (prev, v) =>
         val contained = prev && list.contains(v)

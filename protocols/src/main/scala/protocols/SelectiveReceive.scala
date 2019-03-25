@@ -20,7 +20,7 @@ object SelectiveReceive {
       */
     def apply[T](bufferSize: Int, initialBehavior: Behavior[T]): Behavior[T]  = {
         println(s"applying on Stasher")
-        new Stasher(initialBehavior, initialBehavior, StashBuffer[T](bufferSize))
+        new Stasher(initialBehavior, StashBuffer[T](bufferSize))
     }
 
 //        import akka.actor.typed.Behavior.{validateAsInitial, start, interpretMessage, canonicalize, isUnhandled}
@@ -33,22 +33,24 @@ object SelectiveReceive {
 //    }
 }
 
-class Stasher[T](initialBehavior: Behavior[T], next: Behavior[T], stash: StashBuffer[T]) extends ExtensibleBehavior[T] {
+class Stasher[T](current: Behavior[T], stash: StashBuffer[T]) extends ExtensibleBehavior[T] {
     import akka.actor.typed.Behavior.{validateAsInitial, start, interpretMessage, canonicalize, isUnhandled}
      def receive(ctx: ActorContext[T], msg: T): Behavior[T] = try {
-        val started = validateAsInitial(start(initialBehavior,ctx))
+        println(s"stasher receive $msg")
+        val started = validateAsInitial(start(current,ctx))
         val next = interpretMessage(started, ctx, msg)
         val canonicalNext = canonicalize(next, started, ctx)
-        println(s"canonicalNext = $canonicalNext, next: $next")
+        println(s"canonicalNext = $canonicalNext, next: $next msg: $msg")
         if (Behavior.isUnhandled(next)) {
-            println(s"$next with $msg is unhandled stashsize is ${stash.size}")
-            stash.stash(msg)
-            println(s"stashed $msg length = ${stash.size}")
-            canonicalNext
+          println(s"$next with $msg is unhandled stashsize is ${stash.size}")
+          stash.stash(msg)
+          println(s"stashed $msg length = ${stash.size}")
+          new Stasher[T](canonicalNext, stash)
         } else {
-            println(s"handled and unstashing ${stash.size}")
+            println(s"handled and unstashing message is $msg ${stash.size}")
             stash.unstashAll(ctx.asScala, canonicalNext)
         }
+
      } catch {
          case x: Exception => {println(s"exception $x");Behaviors.unhandled}
      }
