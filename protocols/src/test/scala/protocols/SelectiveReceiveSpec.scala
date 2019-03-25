@@ -10,19 +10,30 @@ import org.scalatest.prop.PropertyChecks
 
 trait SelectiveReceiveSpec extends FunSuite with PropertyChecks with MustMatchers {
 
-    def behavior[T](inbox: TestInbox[T], size: Int, seq: List[T]) =
-        SelectiveReceive(size, expectOne(inbox, seq))
+    def behavior[T](inbox: TestInbox[T], size: Int, seq: List[T]) = {
+      println(s"spec behavior whith ${seq.mkString("; ")}")
+      SelectiveReceive(size, expectOne(inbox, seq))
+    }
 
-    def expectOne[T](inbox: TestInbox[T], seq: List[T]): Behavior[T] =
-        seq match {
-            case x :: xs =>
-                receiveMessagePartial {
-                    case `x` =>
-                        inbox.ref ! x
-                        expectOne(inbox, xs)
-                }
-            case Nil => Behaviors.ignore
+    def expectOne[T](inbox: TestInbox[T], seq: List[T]): Behavior[T] = {
+      println(s"spec going in $inbox, $seq")
+      seq match {
+        case x :: xs => {
+          println(s"setting up for '$x'")
+          receiveMessagePartial {
+            case `x` => {
+              println(s"spec behavior received $x sending to inbox $inbox")
+              inbox.ref ! x
+              expectOne(inbox, xs)
+            }
+          }
         }
+        case Nil => {
+          print("ignoring")
+          Behaviors.ignore
+        }
+      }
+    }
     
     def expectStart[T](inbox: TestInbox[T], start: T, followUp: Behavior[T]): Behavior[T] =
         receiveMessagePartial {
@@ -41,16 +52,20 @@ trait SelectiveReceiveSpec extends FunSuite with PropertyChecks with MustMatcher
       val b = behavior(i, 30, values)
       val testkit = BehaviorTestKit(b, "eventually execute")
       list.foreach(value => {
+        println(s"spec send a $value to $testkit")
         testkit.ref ! value
         testkit.runOne()
       })
+      println(s"testing ${list.mkString(";;")}")
       val delivered = i.receiveAll()
+
       delivered mustBe sorted
       values.foldLeft(true) { (prev, v) =>
         val contained = prev && list.contains(v)
         withClue(s"testing for $v when list=$list and delivered=$delivered: ") {
           delivered.count(_ == v) must be(if (contained) 1 else 0)
         }
+        println("spec succeeded")
         contained
       }
     }

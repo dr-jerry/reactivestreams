@@ -60,3 +60,33 @@ stash/unstash 10:36
 TypeSafe discovery
 ServiceKey[Message]("messag")
 context.spawnAnonymously
+
+Persistence
+def adapter[T](ctx: ActorContext[Command], f => T => Command): ActorRef[T] =
+  ctx.spawnAnounymous(Behaviors.receive[T] { msg =>
+    ctx.self ! f(msg)
+    Behaviours.stopped
+  }
+) 6:30
+
+
+Supervision: 7:00
+ctx.spawnAnonymously{
+  Bahaviour.supervise(actor)
+    .onFailure([Ex] 
+}
+
+def supervise(behavior: Behavior[T]): Behavior[T] ={
+  new Restarter(behavior, behavior)
+}
+
+class Restarter(initial: Behavior[T], nex: Behavior[T]) extends ExtensibleBehavior[T] {
+  def receive(ctx, msg: T): Behavior[T] = ???
+     = try {
+       val started = validateAsInitial(start(behavior, ctx))
+       val next = interpretMsg(started, ctx, msg)
+       new Restarter(initial, canonicalize(next, started, ctx)
+       } catch 
+  def receiveSignal(ctx, msg: Signal): Behavior[T]) = ??
+  }
+  
