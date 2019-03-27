@@ -13,6 +13,7 @@ object Transactor {
 
     sealed trait Command[T] extends PrivateCommand[T]
     final case class Begin[T](replyTo: ActorRef[ActorRef[Session[T]]]) extends Command[T]
+    final case class End[T](value: Option[T], replyTo: ActorRef[ActorRef[Session[T]]]) extends Command[T]
 
     sealed trait Session[T] extends Product with Serializable
     final case class Extract[T, U](f: T => U, replyTo: ActorRef[U]) extends Session[T]
@@ -20,6 +21,12 @@ object Transactor {
     final case class Commit[T, U](reply: U, replyTo: ActorRef[U]) extends Session[T]
     final case class Rollback[T]() extends Session[T]
 
+    def sessionBehavior[T](value: T, callRef: ActorRef[Command[T]]) :Behavior[Session[T]] = Behaviors.receiveMessage[Session[T]]{
+        case Extract(f, replyTo) => { replyTo.narrow ! f(value); Behavior.same }
+        case Modify(f, id, reply, replyTo) =>  {replyTo ! reply; sessionBehavior(f(value), callRef)}
+        case Rollback() => {callRef ! End(None)}
+        case Commit(reply, replyTo) => {callRef ! End(Some(value))}
+    }
     /**
       * @return A behavior that accepts public [[Command]] messages. The behavior
       *         should be wrapped in a [[SelectiveReceive]] decorator (with a capacity
@@ -30,8 +37,23 @@ object Transactor {
       * @param sessionTimeout Delay before rolling back the pending modifications and
       *                       terminating the session
       */
-    def apply[T](value: T, sessionTimeout: FiniteDuration): Behavior[Command[T]] =
-        ???
+    def apply[T](value: T, sessionTimeout: FiniteDuration): Behavior[Command[T]] = {
+         def init(value: T) : Behavior[Command[T]] = Behaviors.receivePartial[Command[T]]{
+            case (ctx, Begin(replyTo)) => {
+                val sessionHandler = ctx.spawnAnonymous(sessionBehavior(value, ctx.self))
+                replyTo ! sessionHandler
+                SelectiveReceive(30, running(value))
+            }
+        }
+        def running(value: T) : Behavior[Command[T]] = Behaviors.receivePartial[Command[T]]{
+            case (ctx, End(v1, replyTo)) => { v1 match {
+                case Some(v) => init(v)
+                case None => init(value)
+            }}
+            case _ => Behaviors.unhandled
+        }
+        init(value)
+    }
 
     /**
       * @return A behavior that defines how to react to any [[PrivateCommand]] when the transactor

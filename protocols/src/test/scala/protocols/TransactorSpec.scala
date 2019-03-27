@@ -25,6 +25,7 @@ trait TransactorSpec extends FunSuite with MustMatchers with PropertyChecks {
       lastSerial += 1
       lastSerial
     }
+    println(s"serial is ${serial}")
     val extract = Gen.const(Extract[Int, Int](identity, i.ref))
     val map = Gen.oneOf(
       Gen.zip(arbitrary[Int], serial).map {
@@ -36,16 +37,18 @@ trait TransactorSpec extends FunSuite with MustMatchers with PropertyChecks {
     )
     val op = Gen.oneOf(extract, map)
     val ops = Gen.listOf(op)
-
+    println(s"ops is $ops")
     forAll((ops, "ops")) { list =>
+      println(s"ops list${list.mkString(",")}")
       val start = 1
       val testkit = BehaviorTestKit(Transactor(start, 3.seconds))
 
       val sessionInbox = TestInbox[ActorRef[Session[Int]]]()
+      println("sending Begin to transactor..")
       testkit.ref ! Begin(sessionInbox.ref)
       testkit.runOne()
       val session = testkit.childTestKit(sessionInbox.receiveMessage())
-
+      println(s"session is $session")
       val end = list.foldLeft(start) { (current, op) =>
         session.ref ! op
         session.runOne()
