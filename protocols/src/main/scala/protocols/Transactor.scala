@@ -4,6 +4,7 @@ import akka.actor.typed._
 import akka.actor.typed.scaladsl._
 
 import scala.concurrent.duration._
+import scala.util.{Failure, Success, Try}
 
 object Transactor {
 
@@ -13,7 +14,6 @@ object Transactor {
 
     sealed trait Command[T] extends PrivateCommand[T]
     final case class Begin[T](replyTo: ActorRef[ActorRef[Session[T]]]) extends Command[T]
-    final case class End[T](value: Option[T], replyTo: ActorRef[ActorRef[Session[T]]]) extends Command[T]
 
     sealed trait Session[T] extends Product with Serializable
     final case class Extract[T, U](f: T => U, replyTo: ActorRef[U]) extends Session[T]
@@ -21,12 +21,6 @@ object Transactor {
     final case class Commit[T, U](reply: U, replyTo: ActorRef[U]) extends Session[T]
     final case class Rollback[T]() extends Session[T]
 
-    def sessionBehavior[T](value: T, callRef: ActorRef[Command[T]]) :Behavior[Session[T]] = Behaviors.receiveMessage[Session[T]]{
-        case Extract(f, replyTo) => { replyTo.narrow ! f(value); Behavior.same }
-        case Modify(f, id, reply, replyTo) =>  {replyTo ! reply; sessionBehavior(f(value), callRef)}
-        case Rollback() => {callRef ! End(None)}
-        case Commit(reply, replyTo) => {callRef ! End(Some(value))}
-    }
     /**
       * @return A behavior that accepts public [[Command]] messages. The behavior
       *         should be wrapped in a [[SelectiveReceive]] decorator (with a capacity
@@ -38,22 +32,11 @@ object Transactor {
       *                       terminating the session
       */
     def apply[T](value: T, sessionTimeout: FiniteDuration): Behavior[Command[T]] = {
-         def init(value: T) : Behavior[Command[T]] = Behaviors.receivePartial[Command[T]]{
-            case (ctx, Begin(replyTo)) => {
-                val sessionHandler = ctx.spawnAnonymous(sessionBehavior(value, ctx.self))
-                replyTo ! sessionHandler
-                SelectiveReceive(30, running(value))
-            }
-        }
-        def running(value: T) : Behavior[Command[T]] = Behaviors.receivePartial[Command[T]]{
-            case (ctx, End(v1, replyTo)) => { v1 match {
-                case Some(v) => init(v)
-                case None => init(value)
-            }}
-            case _ => Behaviors.unhandled
-        }
-        init(value)
+
+        SelectiveReceive(30, idle(value, sessionTimeout)).narrow
+
     }
+
 
     /**
       * @return A behavior that defines how to react to any [[PrivateCommand]] when the transactor
@@ -72,9 +55,29 @@ object Transactor {
       *   - After a session is started, the next behavior should be [[inSession]],
       *   - Messages other than [[Begin]] should not change the behavior.
       */
-    private def idle[T](value: T, sessionTimeout: FiniteDuration): Behavior[PrivateCommand[T]] =
-                ???
-        
+    private def idle[T](value: T, sessionTimeout: FiniteDuration): Behavior[PrivateCommand[T]] = {
+
+        Behaviors.receive {
+
+            case (ctx, Begin(replyTo)) =>
+                val sessionRef = ctx.spawnAnonymous(
+                    Behaviors.supervise(
+                        sessionHandler(value, ctx.self, Set())
+                    )
+                      .onFailure[Throwable](SupervisorStrategy.stop))
+
+                ctx.watchWith(sessionRef, RolledBack(sessionRef))
+
+                ctx.setReceiveTimeout(sessionTimeout, RolledBack(sessionRef))
+
+                replyTo ! sessionRef // replyTo is outside world, which gets passed the session ref
+
+                inSession(value, sessionTimeout, sessionRef)
+
+            case _ => Behaviors.same
+        }
+    }
+
     /**
       * @return A behavior that defines how to react to [[PrivateCommand]] messages when the transactor has
       *         a running session.
@@ -85,9 +88,25 @@ object Transactor {
       * @param sessionTimeout Timeout to use for the next session
       * @param sessionRef Reference to the child [[Session]] actor
       */
-    private def inSession[T](rollbackValue: T, sessionTimeout: FiniteDuration, sessionRef: ActorRef[Session[T]]): Behavior[PrivateCommand[T]] =
-                ???
-        
+    private def inSession[T](rollbackValue: T, sessionTimeout: FiniteDuration, sessionRef: ActorRef[Session[T]]): Behavior[PrivateCommand[T]] = { // you are inSession for a specific session ref
+
+        Behaviors.receive {
+
+            case (_, Committed(session, value)) =>
+                if (session == sessionRef) {
+                    idle(value, sessionTimeout)
+                } else Behaviors.same
+
+            case (ctx, RolledBack(session)) =>
+                if (session == sessionRef) {
+                    ctx.stop(session)
+                    idle(rollbackValue, sessionTimeout)
+                } else Behaviors.same
+
+            case (_, Begin(_)) => Behaviors.unhandled
+        }
+    }
+
     /**
       * @return A behavior handling [[Session]] messages. See in the instructions
       *         the precise semantics that each message should have.
@@ -96,7 +115,37 @@ object Transactor {
       * @param commit Parent actor reference, to send the [[Committed]] message to
       * @param done Set of already applied [[Modify]] messages
       */
-    private def sessionHandler[T](currentValue: T, commit: ActorRef[Committed[T]], done: Set[Long]): Behavior[Session[T]] =
-                ???
-        
+    private def sessionHandler[T](currentValue: T, commit: ActorRef[Committed[T]], done: Set[Long]): Behavior[Session[T]] = {
+        Behaviors.receive[Session[T]] {
+
+            case (_, ext @ Extract(_, _)) =>
+                val extracted = ext.f(currentValue)
+                ext.replyTo ! extracted
+                Behaviors.same
+
+            case (_, mod @ Modify(_, _, _, _)) =>
+                if (!done.contains(mod.id)) {
+                    val modification = Try(mod.f(currentValue))
+                    modification match {
+                        case s @ Success(_) =>
+                            //println("Modified: " + currentValue +" to: " + s.value)
+                            mod.replyTo ! mod.reply
+                            sessionHandler(s.value, commit, done + mod.id)
+                        case Failure(_) =>
+                            //ctx.self ! Rollback()
+                            sessionHandler(currentValue, commit, done + mod.id)
+                    }
+                } else {
+                    mod.replyTo ! mod.reply
+                    sessionHandler(currentValue, commit, done + mod.id)
+                }
+
+            case (ctx, com @ Commit(_, _)) =>
+                com.replyTo ! com.reply
+                commit ! Committed(ctx.self, currentValue)
+                Behaviors.stopped
+
+        }
+
+    }
 }
